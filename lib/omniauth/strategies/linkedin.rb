@@ -1,143 +1,78 @@
-require 'omniauth-oauth2'
-
 module OmniAuth
   module Strategies
-    class LinkedIn < OmniAuth::Strategies::OAuth2
+    class Linkedin < OmniAuth::Strategies::OAuth2
       option :name, 'linkedin'
 
       option :client_options, {
-        :site => 'https://api.linkedin.com',
-        :authorize_url => 'https://www.linkedin.com/oauth/v2/authorization?response_type=code',
-        :token_url => 'https://www.linkedin.com/oauth/v2/accessToken'
+        site: 'https://api.linkedin.com',
+        authorize_url: 'https://www.linkedin.com/oauth/v2/authorization',
+        token_url: 'https://www.linkedin.com/oauth/v2/accessToken',
+        user_info_url: 'https://api.linkedin.com/v2/userinfo'
       }
 
-      option :scope, 'r_liteprofile r_emailaddress'
-      option :fields, ['id', 'first-name', 'last-name', 'picture-url', 'email-address']
+      option :scope, 'openid profile email'
+      option :fields, ['id', 'firstName', 'lastName', 'profilePicture', 'email']
 
-      uid do
-        raw_info['id']
-      end
+      uid { raw_info['id'] }
 
       info do
         {
-          :email => email_address,
-          :first_name => localized_field('firstName'),
-          :last_name => localized_field('lastName'),
-          :picture_url => picture_url
+          email: raw_info['email'],
+          first_name: raw_info['given_name'],
+          last_name: raw_info['family_name'],
+          picture_url: raw_info['picture']
         }
       end
 
       extra do
-        {
-          'raw_info' => raw_info
-        }
+        { 'raw_info' => raw_info }
       end
 
       def callback_url
-        full_host + script_name + callback_path
+        Rails.logger.debug "[OmniAuth] Generating callback URL"
+        url = full_host + script_name + callback_path
+        Rails.logger.debug "[OmniAuth] Callback URL: #{url}"
+        url
       end
 
       alias :oauth2_access_token :access_token
 
       def access_token
-        ::OAuth2::AccessToken.new(client, oauth2_access_token.token, {
-          :expires_in => oauth2_access_token.expires_in,
-          :expires_at => oauth2_access_token.expires_at,
-          :refresh_token => oauth2_access_token.refresh_token
+        Rails.logger.debug "[OmniAuth] Fetching access token"
+        token = ::OAuth2::AccessToken.new(client, oauth2_access_token.token, {
+          expires_in: oauth2_access_token.expires_in,
+          expires_at: oauth2_access_token.expires_at,
+          refresh_token: oauth2_access_token.refresh_token
         })
+        Rails.logger.debug "[OmniAuth] Access token fetched: #{token.token}"
+        token
       end
 
       def raw_info
-        @raw_info ||= access_token.get(profile_endpoint).parsed
+        Rails.logger.debug "[OmniAuth] Fetching raw info"
+        @raw_info ||= access_token.get(options.client_options[:user_info_url]).parsed
+        Rails.logger.debug "[OmniAuth] Raw info fetched: #{@raw_info}"
+        @raw_info
+      end
+
+      def setup
+        Rails.logger.info "[OmniAuth] Setting up CustomLinkedin strategy"
+        options.client_id = '866gzr0nbli6m6'
+        options.client_secret = '2eLYr76fzMFgfq5c'
+        Rails.logger.debug "[OmniAuth] Client ID: #{options.client_id}, Client Secret: #{options.client_secret}"
+        Rails.logger.debug "[OmniAuth] Scopes: #{options.scope}"
+        Rails.logger.info "[OmniAuth] CustomLinkedin strategy setup complete"
       end
 
       private
 
-      def email_address
-        if options.fields.include? 'email-address'
-          fetch_email_address
-          parse_email_address
-        end
-      end
-
-      def fetch_email_address
-        @email_address_response ||= access_token.get(email_address_endpoint).parsed
-      end
-
-      def parse_email_address
-        return unless email_address_available?
-
-        @email_address_response['elements'].first['handle~']['emailAddress']
-      end
-
-      def email_address_available?
-        @email_address_response['elements'] &&
-          @email_address_response['elements'].is_a?(Array) &&
-          @email_address_response['elements'].first &&
-          @email_address_response['elements'].first['handle~']
-      end
-
-      def fields_mapping
-        {
-          'id' => 'id',
-          'first-name' => 'firstName',
-          'last-name' => 'lastName',
-          'picture-url' => 'profilePicture(displayImage~:playableStreams)'
-        }
-      end
-
-      def fields
-        options.fields.each.with_object([]) do |field, result|
-          result << fields_mapping[field] if fields_mapping.has_key? field
-        end
-      end
-
-      def localized_field field_name
-        return unless localized_field_available? field_name
-
-        raw_info[field_name]['localized'][field_locale(field_name)]
-      end
-
-      def field_locale field_name
-        "#{ raw_info[field_name]['preferredLocale']['language'] }_" \
-          "#{ raw_info[field_name]['preferredLocale']['country'] }"
-      end
-
-      def localized_field_available? field_name
-        raw_info[field_name] && raw_info[field_name]['localized']
-      end
-
-      def picture_url
-        return unless picture_available?
-
-        picture_references.last['identifiers'].first['identifier']
-      end
-
-      def picture_available?
-        raw_info['profilePicture'] &&
-          raw_info['profilePicture']['displayImage~'] &&
-          picture_references
-      end
-
-      def picture_references
-        raw_info['profilePicture']['displayImage~']['elements']
-      end
-
-      def email_address_endpoint
-        '/v2/emailAddress?q=members&projection=(elements*(handle~))'
-      end
-
-      def profile_endpoint
-        "/v2/me?projection=(#{ fields.join(',') })"
-      end
-      
       def token_params
+        Rails.logger.debug "[OmniAuth] Setting token params"
         super.tap do |params|
-          params.client_secret = options.client_secret
+          params[:redirect_uri] = callback_url
+          Rails.logger.debug "[OmniAuth] Token params set: #{params}"
         end
       end
     end
   end
 end
-
-OmniAuth.config.add_camelization 'linkedin', 'LinkedIn'
